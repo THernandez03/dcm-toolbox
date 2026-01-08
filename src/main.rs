@@ -1,6 +1,25 @@
+//! # DCM to JPG Converter
+//!
+//! A command-line tool to convert DICOM (.dcm) files to JPEG images or MP4 videos.
+//!
+//! ## Features
+//!
+//! - Convert single DICOM files or entire directories
+//! - Output as JPEG images in a folder or MP4 video
+//! - Configurable video frame rate
+//! - Force overwrite existing files
+//!
+//! ## Usage
+//!
+//! ```bash
+//! dcm-converter <input_folder> <output>
+//! ```
+//!
+//! Where `<output>` can be a folder (for JPGs) or a file with .mp4 extension (for video).
+
 use std::fs;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result};
@@ -52,17 +71,17 @@ fn main() -> Result<()> {
 
     if is_video_output {
         prepare_video_output(&args.output, args.force)?;
-        convert_to_video(&dcm_files, &args.output, args.fps)?;
+        convert_to_video(&dcm_files, args.output.as_path(), args.fps)?;
     } else {
         prepare_output_folder(&args.output, args.force)?;
-        convert_to_jpgs(&dcm_files, &args.output)?;
+        convert_to_jpgs(&dcm_files, args.output.as_path())?;
     }
 
     println!("\nConversion complete!");
     Ok(())
 }
 
-fn convert_to_jpgs(dcm_files: &[PathBuf], output_dir: &PathBuf) -> Result<()> {
+fn convert_to_jpgs(dcm_files: &[PathBuf], output_dir: &Path) -> Result<()> {
     let total = dcm_files.len();
     let padding = total.to_string().len().max(4); // At least 4 digits
 
@@ -83,10 +102,10 @@ fn convert_to_jpgs(dcm_files: &[PathBuf], output_dir: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn convert_to_video(dcm_files: &[PathBuf], output_path: &PathBuf, fps: u32) -> Result<()> {
+fn convert_to_video(dcm_files: &[PathBuf], output_path: &Path, fps: u32) -> Result<()> {
     // Ensure output path has .mp4 extension
-    let video_path = if output_path.extension().map(|e| e == "mp4").unwrap_or(false) {
-        output_path.clone()
+    let video_path = if output_path.extension().is_some_and(|e| e == "mp4") {
+        output_path.to_path_buf()
     } else {
         output_path.with_extension("mp4")
     };
@@ -101,10 +120,7 @@ fn convert_to_video(dcm_files: &[PathBuf], output_path: &PathBuf, fps: u32) -> R
     let first_image = load_dcm_as_image(&dcm_files[0])?;
     let (target_width, target_height) = (first_image.width(), first_image.height());
 
-    println!(
-        "Creating video: {}x{} @ {} fps",
-        target_width, target_height, fps
-    );
+    println!("Creating video: {target_width}x{target_height} @ {fps} fps");
 
     // Save all frames as PNG files with sequential numbering
     let mut frame_count = 0;
@@ -123,9 +139,9 @@ fn convert_to_video(dcm_files: &[PathBuf], output_path: &PathBuf, fps: u32) -> R
                 };
 
                 // Save as PNG with zero-padded numbering for ffmpeg
-                let frame_path = temp_path.join(format!("frame_{:06}.png", idx));
+                let frame_path = temp_path.join(format!("frame_{idx:06}.png"));
                 img.save_with_format(&frame_path, ImageFormat::Png)
-                    .with_context(|| format!("Failed to save frame: {:?}", frame_path))?;
+                    .with_context(|| format!("Failed to save frame: {frame_path:?}"))?;
 
                 frame_count += 1;
                 println!(
@@ -182,76 +198,74 @@ fn convert_to_video(dcm_files: &[PathBuf], output_path: &PathBuf, fps: u32) -> R
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("ffmpeg encoding failed: {}", stderr);
+        anyhow::bail!("ffmpeg encoding failed: {stderr}");
     }
 
-    println!("\n✓ Video saved to: {:?}", video_path);
-    println!("  Total frames: {}", frame_count);
-    println!("  Duration: {:.2}s", frame_count as f64 / fps as f64);
+    println!("\n✓ Video saved to: {video_path:?}");
+    println!("  Total frames: {frame_count}");
+    println!(
+        "  Duration: {:.2}s",
+        f64::from(frame_count) / f64::from(fps)
+    );
 
     // temp_dir is automatically cleaned up when dropped
     Ok(())
 }
 
 fn load_dcm_as_image(dcm_path: &PathBuf) -> Result<DynamicImage> {
-    let dicom_obj = open_file(dcm_path)
-        .with_context(|| format!("Failed to open DICOM file: {:?}", dcm_path))?;
+    let dicom_obj =
+        open_file(dcm_path).with_context(|| format!("Failed to open DICOM file: {dcm_path:?}"))?;
 
     let pixel_data = dicom_obj
         .decode_pixel_data()
-        .with_context(|| format!("Failed to decode pixel data from: {:?}", dcm_path))?;
+        .with_context(|| format!("Failed to decode pixel data from: {dcm_path:?}"))?;
 
     pixel_data
         .to_dynamic_image(0)
-        .with_context(|| format!("Failed to convert to image: {:?}", dcm_path))
+        .with_context(|| format!("Failed to convert to image: {dcm_path:?}"))
 }
 
 fn validate_input_folder(input: &PathBuf) -> Result<()> {
     if !input.exists() {
-        anyhow::bail!("Input folder does not exist: {:?}", input);
+        anyhow::bail!("Input folder does not exist: {input:?}");
     }
     if !input.is_dir() {
-        anyhow::bail!("Input path is not a directory: {:?}", input);
+        anyhow::bail!("Input path is not a directory: {input:?}");
     }
     Ok(())
 }
 
 fn prepare_output_folder(output: &PathBuf, force: bool) -> Result<()> {
-    if output.exists() {
-        if !is_folder_empty(output)? {
-            if force {
-                println!("Force cleaning output folder: {:?}", output);
-            } else {
-                print!(
-                    "Output folder {:?} is not empty. Clean it and continue? [y/N]: ",
-                    output
-                );
-                io::stdout().flush()?;
+    if output.exists() && !is_folder_empty(output)? {
+        if force {
+            println!("Force cleaning output folder: {output:?}");
+        } else {
+            print!("Output folder {output:?} is not empty. Clean it and continue? [y/N]: ");
+            io::stdout().flush()?;
 
-                let mut input = String::new();
-                io::stdin().read_line(&mut input)?;
+            let mut input = String::new();
+            io::stdin().read_line(&mut input)?;
 
-                let confirmed = matches!(input.trim().to_lowercase().as_str(), "y" | "yes");
-                if !confirmed {
-                    anyhow::bail!("Operation cancelled: output folder is not empty");
-                }
+            let confirmed = matches!(input.trim().to_lowercase().as_str(), "y" | "yes");
+            if !confirmed {
+                anyhow::bail!("Operation cancelled: output folder is not empty");
             }
-
-            fs::remove_dir_all(output)
-                .with_context(|| format!("Failed to clean output folder: {:?}", output))?;
-            println!("Cleaned output folder: {:?}", output);
         }
+
+        fs::remove_dir_all(output)
+            .with_context(|| format!("Failed to clean output folder: {output:?}"))?;
+        println!("Cleaned output folder: {output:?}");
     }
 
     fs::create_dir_all(output)
-        .with_context(|| format!("Failed to create output folder: {:?}", output))?;
+        .with_context(|| format!("Failed to create output folder: {output:?}"))?;
 
     Ok(())
 }
 
 fn is_folder_empty(path: &PathBuf) -> Result<bool> {
     let mut entries =
-        fs::read_dir(path).with_context(|| format!("Failed to read directory: {:?}", path))?;
+        fs::read_dir(path).with_context(|| format!("Failed to read directory: {path:?}"))?;
     Ok(entries.next().is_none())
 }
 
@@ -260,17 +274,14 @@ fn prepare_video_output(output: &PathBuf, force: bool) -> Result<()> {
     if let Some(parent) = output.parent() {
         if !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create output directory: {:?}", parent))?;
+                .with_context(|| format!("Failed to create output directory: {parent:?}"))?;
         }
     }
 
     // Check if output file already exists
     if output.exists() {
         if !force {
-            print!(
-                "Output file {:?} already exists. Overwrite? [y/N]: ",
-                output
-            );
+            print!("Output file {output:?} already exists. Overwrite? [y/N]: ");
             io::stdout().flush()?;
 
             let mut input = String::new();
@@ -283,8 +294,8 @@ fn prepare_video_output(output: &PathBuf, force: bool) -> Result<()> {
         }
 
         fs::remove_file(output)
-            .with_context(|| format!("Failed to remove existing file: {:?}", output))?;
-        println!("Removed existing file: {:?}", output);
+            .with_context(|| format!("Failed to remove existing file: {output:?}"))?;
+        println!("Removed existing file: {output:?}");
     }
 
     Ok(())
@@ -294,17 +305,16 @@ fn collect_dcm_files(input: &PathBuf) -> Result<Vec<PathBuf>> {
     use dicom::dictionary_std::tags;
 
     let entries =
-        fs::read_dir(input).with_context(|| format!("Failed to read input folder: {:?}", input))?;
+        fs::read_dir(input).with_context(|| format!("Failed to read input folder: {input:?}"))?;
 
     let dcm_files: Vec<PathBuf> = entries
-        .filter_map(|entry| entry.ok())
+        .filter_map(std::result::Result::ok)
         .map(|entry| entry.path())
         .filter(|path| {
             path.is_file()
                 && path
                     .extension()
-                    .map(|ext| ext.eq_ignore_ascii_case("dcm"))
-                    .unwrap_or(false)
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("dcm"))
         })
         .collect();
 
@@ -347,26 +357,26 @@ fn collect_dcm_files(input: &PathBuf) -> Result<Vec<PathBuf>> {
 
 fn convert_dcm_to_jpg(
     dcm_path: &PathBuf,
-    output_dir: &PathBuf,
+    output_dir: &Path,
     index: usize,
     padding: usize,
 ) -> Result<PathBuf> {
-    let dicom_obj = open_file(dcm_path)
-        .with_context(|| format!("Failed to open DICOM file: {:?}", dcm_path))?;
+    let dicom_obj =
+        open_file(dcm_path).with_context(|| format!("Failed to open DICOM file: {dcm_path:?}"))?;
 
     let pixel_data = dicom_obj
         .decode_pixel_data()
-        .with_context(|| format!("Failed to decode pixel data from: {:?}", dcm_path))?;
+        .with_context(|| format!("Failed to decode pixel data from: {dcm_path:?}"))?;
 
     let dynamic_image = pixel_data
         .to_dynamic_image(0)
-        .with_context(|| format!("Failed to convert to image: {:?}", dcm_path))?;
+        .with_context(|| format!("Failed to convert to image: {dcm_path:?}"))?;
 
-    let output_path = output_dir.join(format!("{:0width$}.jpg", index, width = padding));
+    let output_path = output_dir.join(format!("{index:0padding$}.jpg"));
 
     dynamic_image
         .save_with_format(&output_path, ImageFormat::Jpeg)
-        .with_context(|| format!("Failed to save JPG: {:?}", output_path))?;
+        .with_context(|| format!("Failed to save JPG: {output_path:?}"))?;
 
     Ok(output_path)
 }
