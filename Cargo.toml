@@ -1,0 +1,12 @@
+[package]
+name = "dcm-converter"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4.4", features = ["derive"] }
+dicom = "0.7"
+dicom-pixeldata = { version = "0.7", features = ["image"] }
+image = "0.25"
+anyhow = "1.0"
+tempfile = "3.19"
