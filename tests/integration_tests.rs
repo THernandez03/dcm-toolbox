@@ -1,4 +1,4 @@
-//! Integration tests for dcm-converter CLI.
+//! Integration tests for dcm-toolbox CLI.
 //!
 //! These tests verify the end-to-end behavior of the CLI tool.
 //!
@@ -19,7 +19,7 @@ fn binary_path() -> PathBuf {
     let mut path = std::env::current_exe().unwrap();
     path.pop(); // Remove test binary name
     path.pop(); // Remove deps
-    path.push("dcm-converter");
+    path.push("dcm-toolbox");
     path
 }
 
@@ -785,7 +785,10 @@ mod empty_input {
         // Output folder may exist but should have no series subfolders
         if output_path.exists() {
             let subdirs = get_subdirs(&output_path);
-            assert!(subdirs.is_empty(), "Empty input should not create series folders");
+            assert!(
+                subdirs.is_empty(),
+                "Empty input should not create series folders"
+            );
         }
     }
 }

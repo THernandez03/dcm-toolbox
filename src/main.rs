@@ -13,8 +13,8 @@
 //! ## Usage
 //!
 //! ```bash
-//! dcm-converter convert --in <input_folder> --out <output_folder> --split-by <split_by>
-//! dcm-converter analyze --in <input_folder>
+//! dcm-toolbox convert --in <input_folder> --out <output_folder> --split-by <split_by>
+//! dcm-toolbox analyze --in <input_folder>
 //! ```
 //!
 //! The `<output_folder>` will contain subfolders for each series/cut.
@@ -29,7 +29,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser, Debug)]
-#[command(name = "dcm-converter")]
+#[command(name = "dcm-toolbox")]
 #[command(about = "Convert DICOM medical images to JPG or video format")]
 struct Args {
     #[command(subcommand)]
