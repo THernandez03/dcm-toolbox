@@ -1,112 +1,66 @@
-//! # DCM to JPG Converter
+//! # DCM Toolbox
 //!
-//! A command-line tool to convert DICOM (.dcm) files to JPEG images or MP4 videos.
+//! A command-line tool to convert DICOM (.dcm) files to JPEG images, MP4 videos,
+//! or STL 3D models.
 //!
 //! ## Features
 //!
-//! - Convert single DICOM files or entire directories
-//! - Output as JPEG images in a folder or MP4 video
-//! - Configurable video frame rate
-//! - Force overwrite existing files
-//! - Separate different series/cuts into individual folders
+//! - Convert DICOM files to JPEG images, MP4 video, or STL 3D models
+//! - Analyze DICOM metadata to identify optimal splitting strategies
+//! - Split output by series/groups based on configurable DICOM tags
+//! - Automatic Otsu thresholding for STL isosurface extraction
+//! - Configurable Gaussian smoothing for 3D model generation
 //!
 //! ## Usage
 //!
 //! ```bash
-//! dcm-toolbox convert --in <input_folder> --out <output_folder> --split-by <split_by>
+//! dcm-toolbox convert --in <input> --out <output> --split-by <tag> jpeg
+//! dcm-toolbox convert --in <input> --out <output> video --fps 10
+//! dcm-toolbox convert --in <input> --out <output> stl --smooth 1.0
 //! dcm-toolbox analyze --in <input_folder>
 //! ```
 //!
-//! The `<output_folder>` will contain subfolders for each series/cut.
+//! The `<output>` folder will contain subfolders for each series/group.
 
 mod analyze;
 mod convert;
 mod utils;
 
-use std::path::PathBuf;
-
 use anyhow::Result;
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
+
+use convert::{ConvertFormat, ConvertShared};
 
 #[derive(Parser, Debug)]
 #[command(name = "dcm-toolbox")]
-#[command(about = "Convert DICOM medical images to JPG or video format")]
-struct Args {
+#[command(about = "Convert DICOM medical images to JPG, video, or 3D model format")]
+struct CliArgs {
     #[command(subcommand)]
     command: Commands,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, ValueEnum)]
-pub enum SplitBy {
-    /// Split by SeriesNumber tag (0020,0011)
-    SeriesNumber,
-    /// Split by SeriesInstanceUID tag (0020,000E)
-    SeriesUid,
-    /// Split by AcquisitionNumber tag (0020,0012)
-    AcquisitionNumber,
-    /// Split by SeriesDescription tag (0008,103E)
-    Description,
-    /// Split by ImageOrientationPatient tag (0020,0037)
-    Orientation,
-    /// Split by StackID tag (0020,9056)
-    StackId,
-}
-
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Convert DICOM files to JPG images or MP4 video
+    /// Convert DICOM files to JPG images, MP4 video, or STL 3D model
     Convert {
-        /// Input folder containing DICOM (.dcm) files
-        #[arg(long = "in")]
-        input: PathBuf,
+        #[command(flatten)]
+        shared: ConvertShared,
 
-        /// Output folder for converted files (JPGs or video files)
-        #[arg(long = "out")]
-        output: PathBuf,
-
-        /// Generate video output (MP4) instead of JPG images
-        #[arg(long)]
-        video: bool,
-
-        /// Frames per second for video output
-        #[arg(long, default_value_t = 10)]
-        fps: u32,
-
-        /// Force clean the output folder without asking for confirmation
-        #[arg(long, short = 'f')]
-        force: bool,
-
-        /// Split files by series/cut identifier into separate folders
-        #[arg(long, short = 's', value_enum, default_value_t = SplitBy::SeriesNumber)]
-        split_by: SplitBy,
+        #[command(subcommand)]
+        format: ConvertFormat,
     },
     /// Analyze DICOM files to find distinguishing tags for different cuts/series
     Analyze {
-        /// Input folder containing DICOM (.dcm) files
-        #[arg(long = "in")]
-        input: PathBuf,
-
-        /// Expected number of groups/series (highlights matching tags in recommendation)
-        #[arg(long, short = 'g')]
-        expected_groups: Option<usize>,
+        #[command(flatten)]
+        args: analyze::AnalyzeArgs,
     },
 }
 
 fn main() -> Result<()> {
-    let args = Args::parse();
+    let args = CliArgs::parse();
 
     match args.command {
-        Commands::Convert {
-            input,
-            output,
-            video,
-            fps,
-            force,
-            split_by,
-        } => convert::run(&input, &output, video, fps, force, split_by),
-        Commands::Analyze {
-            input,
-            expected_groups,
-        } => analyze::run(&input, expected_groups),
+        Commands::Convert { shared, format } => convert::run(&shared, &format),
+        Commands::Analyze { args } => analyze::run(&args),
     }
 }

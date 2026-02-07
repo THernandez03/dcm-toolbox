@@ -5,17 +5,30 @@ use std::fs;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use clap::Args;
 use dicom::dictionary_std::tags;
 use dicom::object::open_file;
 
 use crate::utils::validate_input_folder;
 
-/// Analyze DICOM files to find distinguishing tags for different cuts/series.
-pub fn run(input: &PathBuf, expected_groups: Option<usize>) -> Result<()> {
-    validate_input_folder(input)?;
+/// CLI arguments for the `analyze` subcommand.
+#[derive(Args, Debug)]
+pub struct AnalyzeArgs {
+    /// Input folder containing DICOM (.dcm) files
+    #[arg(long = "in")]
+    pub input: PathBuf,
 
-    let entries =
-        fs::read_dir(input).with_context(|| format!("Failed to read input folder: {input:?}"))?;
+    /// Expected number of groups/series (highlights matching tags in recommendation)
+    #[arg(long, short = 'g')]
+    pub expected_groups: Option<usize>,
+}
+
+/// Analyze DICOM files to find distinguishing tags for different cuts/series.
+pub fn run(args: &AnalyzeArgs) -> Result<()> {
+    validate_input_folder(&args.input)?;
+
+    let entries = fs::read_dir(&args.input)
+        .with_context(|| format!("Failed to read input folder: {:?}", args.input))?;
 
     let dcm_files: Vec<PathBuf> = entries
         .filter_map(std::result::Result::ok)
@@ -29,7 +42,7 @@ pub fn run(input: &PathBuf, expected_groups: Option<usize>) -> Result<()> {
         .collect();
 
     if dcm_files.is_empty() {
-        println!("No .dcm files found in {input:?}");
+        println!("No .dcm files found in {:?}", args.input);
         return Ok(());
     }
 
@@ -204,7 +217,7 @@ pub fn run(input: &PathBuf, expected_groups: Option<usize>) -> Result<()> {
         ("StackID", "--split-by stack-id", stack_id_map.len()),
     ];
 
-    if let Some(expected) = expected_groups {
+    if let Some(expected) = args.expected_groups {
         println!("Looking for tag with exactly {} unique values:", expected);
         for (name, flag, count) in candidates {
             if count == expected {

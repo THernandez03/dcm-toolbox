@@ -2,11 +2,19 @@
 //!
 //! These tests verify the end-to-end behavior of the CLI tool.
 //!
+//! ## CLI Structure
+//!
+//! ```text
+//! dcm-toolbox convert [SHARED OPTIONS] <FORMAT> [FORMAT OPTIONS]
+//! dcm-toolbox analyze --in <folder>
+//! ```
+//!
 //! ## Output Structure
 //!
 //! The converter creates subfolders per series/group:
-//! - JPG mode: `{output}/{series}/{0001.jpg, 0002.jpg, ...}`
+//! - JPEG mode: `{output}/{series}/{0001.jpg, 0002.jpg, ...}`
 //! - Video mode: `{output}/{series}/{series}.mp4`
+//! - STL mode: `{output}/{series}/{series}.stl`
 
 use std::fs;
 use std::path::PathBuf;
@@ -28,12 +36,26 @@ fn example_folder() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("example")
 }
 
-/// Helper to run the CLI with given arguments (prepends 'convert' subcommand)
-fn run_cli(args: &[&str]) -> std::process::Output {
+/// Run a convert subcommand with shared options before the format subcommand.
+///
+/// `format`: The format subcommand (`jpeg`, `video`, `stl`)
+/// `shared_args`: Shared opts like `--in`, `--out`, `--force`, `--split-by`
+/// `format_args`: Format-specific opts like `--fps`, `--iso-level`, `--smooth`
+fn run_convert(format: &str, shared_args: &[&str], format_args: &[&str]) -> std::process::Output {
     let mut full_args = vec!["convert"];
-    full_args.extend(args);
+    full_args.extend(shared_args);
+    full_args.push(format);
+    full_args.extend(format_args);
     Command::new(binary_path())
         .args(&full_args)
+        .output()
+        .expect("Failed to execute command")
+}
+
+/// Run an arbitrary CLI command (no prepended subcommand).
+fn run_raw(args: &[&str]) -> std::process::Output {
+    Command::new(binary_path())
+        .args(args)
         .output()
         .expect("Failed to execute command")
 }
@@ -81,10 +103,9 @@ mod cli_args {
 
     #[test]
     fn missing_input_arg_shows_error() {
-        let output = Command::new(binary_path())
-            .args(["convert", "--out", "/tmp/out"])
-            .output()
-            .expect("Failed to execute command");
+        let temp_dir = TempDir::new().unwrap();
+        let output_path = temp_dir.path().join("out");
+        let output = run_raw(&["convert", "--out", output_path.to_str().unwrap(), "jpeg"]);
 
         assert!(!output.status.success());
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -93,10 +114,7 @@ mod cli_args {
 
     #[test]
     fn missing_output_arg_shows_error() {
-        let output = Command::new(binary_path())
-            .args(["convert", "--in", "./example"])
-            .output()
-            .expect("Failed to execute command");
+        let output = run_raw(&["convert", "--in", "./example", "jpeg"]);
 
         assert!(!output.status.success());
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -104,16 +122,35 @@ mod cli_args {
     }
 
     #[test]
+    fn missing_format_subcommand_shows_error() {
+        let temp_dir = TempDir::new().unwrap();
+        let output_path = temp_dir.path().join("out");
+        let output = run_raw(&[
+            "convert",
+            "--in",
+            "./example",
+            "--out",
+            output_path.to_str().unwrap(),
+        ]);
+
+        assert!(!output.status.success());
+    }
+
+    #[test]
     fn nonexistent_input_folder_fails() {
         let temp_dir = TempDir::new().unwrap();
         let output_path = temp_dir.path().join("output");
 
-        let output = run_cli(&[
-            "--in",
-            "/nonexistent/folder/that/does/not/exist",
-            "--out",
-            output_path.to_str().unwrap(),
-        ]);
+        let output = run_convert(
+            "jpeg",
+            &[
+                "--in",
+                "/nonexistent/folder/that/does/not/exist",
+                "--out",
+                output_path.to_str().unwrap(),
+            ],
+            &[],
+        );
 
         assert!(!output.status.success());
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -125,18 +162,16 @@ mod cli_args {
     }
 
     #[test]
-    fn help_flag_shows_usage() {
-        let output = Command::new(binary_path())
-            .args(["convert", "--help"])
-            .output()
-            .expect("Failed to execute command");
+    fn help_flag_shows_convert_subcommands() {
+        let output = run_raw(&["convert", "--help"]);
 
         assert!(output.status.success());
         let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("jpeg"), "Should show jpeg subcommand");
+        assert!(stdout.contains("video"), "Should show video subcommand");
+        assert!(stdout.contains("stl"), "Should show stl subcommand");
         assert!(stdout.contains("--in"), "Should show --in option");
         assert!(stdout.contains("--out"), "Should show --out option");
-        assert!(stdout.contains("--video"), "Should show --video option");
-        assert!(stdout.contains("--fps"), "Should show --fps option");
         assert!(stdout.contains("--force"), "Should show --force option");
         assert!(
             stdout.contains("--split-by"),
@@ -145,17 +180,25 @@ mod cli_args {
     }
 
     #[test]
-    fn short_flags_shown_in_help() {
-        let output = Command::new(binary_path())
-            .args(["convert", "--help"])
-            .output()
-            .expect("Failed to execute command");
+    fn video_help_shows_fps_option() {
+        let output = run_raw(&["convert", "--in", ".", "--out", ".", "video", "--help"]);
 
+        assert!(output.status.success());
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains("-i"), "Should show -i short flag");
-        assert!(stdout.contains("-o"), "Should show -o short flag");
-        assert!(stdout.contains("-v"), "Should show -v short flag");
-        assert!(stdout.contains("-f"), "Should show -f short flag");
+        assert!(stdout.contains("--fps"), "Should show --fps option");
+    }
+
+    #[test]
+    fn stl_help_shows_specific_options() {
+        let output = run_raw(&["convert", "--in", ".", "--out", ".", "stl", "--help"]);
+
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("--iso-level"),
+            "Should show --iso-level option"
+        );
+        assert!(stdout.contains("--smooth"), "Should show --smooth option");
     }
 }
 
@@ -177,13 +220,17 @@ mod jpg_conversion {
         let temp_dir = TempDir::new().unwrap();
         let output_path = temp_dir.path().join("output");
 
-        let output = run_cli(&[
-            "--in",
-            example.to_str().unwrap(),
-            "--out",
-            output_path.to_str().unwrap(),
-            "--force",
-        ]);
+        let output = run_convert(
+            "jpeg",
+            &[
+                "--in",
+                example.to_str().unwrap(),
+                "--out",
+                output_path.to_str().unwrap(),
+                "--force",
+            ],
+            &[],
+        );
 
         assert!(output.status.success(), "CLI failed: {:?}", output);
         assert!(output_path.exists(), "Output folder should exist");
@@ -211,13 +258,17 @@ mod jpg_conversion {
         let temp_dir = TempDir::new().unwrap();
         let output_path = temp_dir.path().join("output");
 
-        let output = run_cli(&[
-            "--in",
-            example.to_str().unwrap(),
-            "--out",
-            output_path.to_str().unwrap(),
-            "--force",
-        ]);
+        let output = run_convert(
+            "jpeg",
+            &[
+                "--in",
+                example.to_str().unwrap(),
+                "--out",
+                output_path.to_str().unwrap(),
+                "--force",
+            ],
+            &[],
+        );
 
         assert!(output.status.success());
 
@@ -260,13 +311,17 @@ mod jpg_conversion {
         let output_path = temp_dir.path().join("output");
 
         // First run to create series folders
-        let output = run_cli(&[
-            "--in",
-            example.to_str().unwrap(),
-            "--out",
-            output_path.to_str().unwrap(),
-            "--force",
-        ]);
+        let output = run_convert(
+            "jpeg",
+            &[
+                "--in",
+                example.to_str().unwrap(),
+                "--out",
+                output_path.to_str().unwrap(),
+                "--force",
+            ],
+            &[],
+        );
         assert!(output.status.success());
 
         // Add a dummy file to one of the series folders
@@ -276,13 +331,17 @@ mod jpg_conversion {
         }
 
         // Run again with force
-        let output = run_cli(&[
-            "--in",
-            example.to_str().unwrap(),
-            "--out",
-            output_path.to_str().unwrap(),
-            "--force",
-        ]);
+        let output = run_convert(
+            "jpeg",
+            &[
+                "--in",
+                example.to_str().unwrap(),
+                "--out",
+                output_path.to_str().unwrap(),
+                "--force",
+            ],
+            &[],
+        );
 
         assert!(output.status.success());
 
@@ -309,12 +368,16 @@ mod jpg_conversion {
         // Create empty output folder
         fs::create_dir_all(&output_path).unwrap();
 
-        let output = run_cli(&[
-            "--in",
-            example.to_str().unwrap(),
-            "--out",
-            output_path.to_str().unwrap(),
-        ]);
+        let output = run_convert(
+            "jpeg",
+            &[
+                "--in",
+                example.to_str().unwrap(),
+                "--out",
+                output_path.to_str().unwrap(),
+            ],
+            &[],
+        );
 
         assert!(output.status.success());
 
@@ -334,13 +397,17 @@ mod jpg_conversion {
         let output_path = temp_dir.path().join("output");
 
         // First run to create folders
-        run_cli(&[
-            "--in",
-            example.to_str().unwrap(),
-            "--out",
-            output_path.to_str().unwrap(),
-            "--force",
-        ]);
+        run_convert(
+            "jpeg",
+            &[
+                "--in",
+                example.to_str().unwrap(),
+                "--out",
+                output_path.to_str().unwrap(),
+                "--force",
+            ],
+            &[],
+        );
 
         // Add dummy file to a series folder
         let subdirs = get_subdirs(&output_path);
@@ -348,13 +415,17 @@ mod jpg_conversion {
             fs::write(first_subdir.join("old.txt"), "content").unwrap();
         }
 
-        let output = run_cli(&[
-            "--in",
-            example.to_str().unwrap(),
-            "--out",
-            output_path.to_str().unwrap(),
-            "-f", // Short flag
-        ]);
+        let output = run_convert(
+            "jpeg",
+            &[
+                "--in",
+                example.to_str().unwrap(),
+                "--out",
+                output_path.to_str().unwrap(),
+                "-f", // Short flag
+            ],
+            &[],
+        );
 
         assert!(output.status.success());
 
@@ -377,13 +448,17 @@ mod jpg_conversion {
         let temp_dir = TempDir::new().unwrap();
         let output_path = temp_dir.path().join("output");
 
-        let output = run_cli(&[
-            "--in",
-            example.to_str().unwrap(),
-            "--out",
-            output_path.to_str().unwrap(),
-            "--force",
-        ]);
+        let output = run_convert(
+            "jpeg",
+            &[
+                "--in",
+                example.to_str().unwrap(),
+                "--out",
+                output_path.to_str().unwrap(),
+                "--force",
+            ],
+            &[],
+        );
 
         assert!(output.status.success());
 
@@ -419,7 +494,7 @@ mod video_conversion {
     use super::*;
 
     #[test]
-    fn video_flag_creates_video_in_series_subfolders() {
+    fn video_subcommand_creates_video_in_series_subfolders() {
         let example = example_folder();
         if !example.exists() {
             return;
@@ -433,14 +508,17 @@ mod video_conversion {
         let temp_dir = TempDir::new().unwrap();
         let output_path = temp_dir.path().join("video_output");
 
-        let output = run_cli(&[
-            "--in",
-            example.to_str().unwrap(),
-            "--out",
-            output_path.to_str().unwrap(),
-            "--video",
-            "--force",
-        ]);
+        let output = run_convert(
+            "video",
+            &[
+                "--in",
+                example.to_str().unwrap(),
+                "--out",
+                output_path.to_str().unwrap(),
+                "--force",
+            ],
+            &[],
+        );
 
         assert!(output.status.success(), "CLI failed: {:?}", output);
         assert!(output_path.exists(), "Output folder should exist");
@@ -486,16 +564,17 @@ mod video_conversion {
         let temp_dir = TempDir::new().unwrap();
         let output_path = temp_dir.path().join("video_output");
 
-        let output = run_cli(&[
-            "--in",
-            example.to_str().unwrap(),
-            "--out",
-            output_path.to_str().unwrap(),
-            "--video",
-            "--fps",
-            "30",
-            "--force",
-        ]);
+        let output = run_convert(
+            "video",
+            &[
+                "--in",
+                example.to_str().unwrap(),
+                "--out",
+                output_path.to_str().unwrap(),
+                "--force",
+            ],
+            &["--fps", "30"],
+        );
 
         assert!(output.status.success());
 
@@ -518,14 +597,17 @@ mod video_conversion {
         let temp_dir = TempDir::new().unwrap();
         let output_path = temp_dir.path().join("video_output");
 
-        let output = run_cli(&[
-            "--in",
-            example.to_str().unwrap(),
-            "--out",
-            output_path.to_str().unwrap(),
-            "--video",
-            "--force",
-        ]);
+        let output = run_convert(
+            "video",
+            &[
+                "--in",
+                example.to_str().unwrap(),
+                "--out",
+                output_path.to_str().unwrap(),
+                "--force",
+            ],
+            &[],
+        );
 
         assert!(output.status.success());
 
@@ -557,14 +639,17 @@ mod video_conversion {
         let output_path = temp_dir.path().join("video_output");
 
         // First run
-        let output = run_cli(&[
-            "--in",
-            example.to_str().unwrap(),
-            "--out",
-            output_path.to_str().unwrap(),
-            "--video",
-            "--force",
-        ]);
+        let output = run_convert(
+            "video",
+            &[
+                "--in",
+                example.to_str().unwrap(),
+                "--out",
+                output_path.to_str().unwrap(),
+                "--force",
+            ],
+            &[],
+        );
         assert!(output.status.success());
 
         // Add dummy file to a series folder
@@ -574,14 +659,17 @@ mod video_conversion {
         }
 
         // Run again with force
-        let output = run_cli(&[
-            "--in",
-            example.to_str().unwrap(),
-            "--out",
-            output_path.to_str().unwrap(),
-            "--video",
-            "--force",
-        ]);
+        let output = run_convert(
+            "video",
+            &[
+                "--in",
+                example.to_str().unwrap(),
+                "--out",
+                output_path.to_str().unwrap(),
+                "--force",
+            ],
+            &[],
+        );
 
         assert!(output.status.success());
 
@@ -596,6 +684,117 @@ mod video_conversion {
 }
 
 // =============================================================================
+// STL Conversion Tests
+// =============================================================================
+
+mod stl_conversion {
+    use super::*;
+
+    #[test]
+    fn stl_subcommand_creates_stl_in_series_subfolders() {
+        let example = example_folder();
+        if !example.exists() {
+            eprintln!("Skipping test: example folder not found");
+            return;
+        }
+
+        let temp_dir = TempDir::new().unwrap();
+        let output_path = temp_dir.path().join("stl_output");
+
+        let output = run_convert(
+            "stl",
+            &[
+                "--in",
+                example.to_str().unwrap(),
+                "--out",
+                output_path.to_str().unwrap(),
+                "--force",
+            ],
+            &[],
+        );
+
+        assert!(output.status.success(), "CLI failed: {:?}", output);
+        assert!(output_path.exists(), "Output folder should exist");
+
+        // STL files should be in series subfolders, named after the folder
+        let subdirs = get_subdirs(&output_path);
+        assert!(
+            !subdirs.is_empty(),
+            "Should have at least one series subfolder"
+        );
+
+        for subdir in &subdirs {
+            let folder_name = subdir.file_name().unwrap().to_str().unwrap();
+            let stl_file = subdir.join(format!("{folder_name}.stl"));
+
+            assert!(stl_file.exists(), "STL file should exist at {:?}", stl_file);
+
+            // Check file size is reasonable (> 84 bytes = STL header)
+            let metadata = fs::metadata(&stl_file).unwrap();
+            assert!(
+                metadata.len() > 84,
+                "STL file should have content beyond header: {} bytes",
+                metadata.len()
+            );
+        }
+    }
+
+    #[test]
+    fn stl_mode_cleans_existing_series_with_force() {
+        let example = example_folder();
+        if !example.exists() {
+            return;
+        }
+
+        let temp_dir = TempDir::new().unwrap();
+        let output_path = temp_dir.path().join("stl_output");
+
+        // First run
+        let output = run_convert(
+            "stl",
+            &[
+                "--in",
+                example.to_str().unwrap(),
+                "--out",
+                output_path.to_str().unwrap(),
+                "--force",
+            ],
+            &[],
+        );
+        assert!(output.status.success());
+
+        // Add dummy file to a series folder
+        let subdirs = get_subdirs(&output_path);
+        if let Some(first_subdir) = subdirs.first() {
+            fs::write(first_subdir.join("old_stl.txt"), "old").unwrap();
+        }
+
+        // Run again with force
+        let output = run_convert(
+            "stl",
+            &[
+                "--in",
+                example.to_str().unwrap(),
+                "--out",
+                output_path.to_str().unwrap(),
+                "--force",
+            ],
+            &[],
+        );
+
+        assert!(output.status.success());
+
+        // Old files should be cleaned
+        for subdir in get_subdirs(&output_path) {
+            assert!(
+                !subdir.join("old_stl.txt").exists(),
+                "Old files should be cleaned"
+            );
+        }
+    }
+}
+
+// =============================================================================
 // Output Mode Tests
 // =============================================================================
 
@@ -603,7 +802,7 @@ mod output_mode {
     use super::*;
 
     #[test]
-    fn default_output_is_jpg_mode_in_series_folders() {
+    fn jpeg_subcommand_creates_jpgs_in_series_folders() {
         let example = example_folder();
         if !example.exists() {
             return;
@@ -612,13 +811,17 @@ mod output_mode {
         let temp_dir = TempDir::new().unwrap();
         let output_path = temp_dir.path().join("my_output_folder");
 
-        let output = run_cli(&[
-            "--in",
-            example.to_str().unwrap(),
-            "--out",
-            output_path.to_str().unwrap(),
-            "--force",
-        ]);
+        let output = run_convert(
+            "jpeg",
+            &[
+                "--in",
+                example.to_str().unwrap(),
+                "--out",
+                output_path.to_str().unwrap(),
+                "--force",
+            ],
+            &[],
+        );
 
         assert!(output.status.success());
         assert!(output_path.is_dir(), "Output should be a directory");
@@ -641,7 +844,7 @@ mod output_mode {
     }
 
     #[test]
-    fn video_flag_creates_videos_in_series_folders() {
+    fn video_subcommand_creates_videos_in_series_folders() {
         let example = example_folder();
         if !example.exists() {
             return;
@@ -654,14 +857,17 @@ mod output_mode {
         let temp_dir = TempDir::new().unwrap();
         let output_path = temp_dir.path().join("video_folder");
 
-        let output = run_cli(&[
-            "--in",
-            example.to_str().unwrap(),
-            "--out",
-            output_path.to_str().unwrap(),
-            "--video",
-            "--force",
-        ]);
+        let output = run_convert(
+            "video",
+            &[
+                "--in",
+                example.to_str().unwrap(),
+                "--out",
+                output_path.to_str().unwrap(),
+                "--force",
+            ],
+            &[],
+        );
 
         assert!(output.status.success());
         assert!(output_path.is_dir(), "Output should be a directory");
@@ -683,7 +889,7 @@ mod output_mode {
     }
 
     #[test]
-    fn no_mp4_files_in_jpg_mode() {
+    fn no_mp4_files_in_jpeg_mode() {
         let example = example_folder();
         if !example.exists() {
             return;
@@ -692,18 +898,22 @@ mod output_mode {
         let temp_dir = TempDir::new().unwrap();
         let output_path = temp_dir.path().join("output");
 
-        let output = run_cli(&[
-            "--in",
-            example.to_str().unwrap(),
-            "--out",
-            output_path.to_str().unwrap(),
-            "--force",
-        ]);
+        let output = run_convert(
+            "jpeg",
+            &[
+                "--in",
+                example.to_str().unwrap(),
+                "--out",
+                output_path.to_str().unwrap(),
+                "--force",
+            ],
+            &[],
+        );
 
         assert!(output.status.success());
 
         let mp4_count = count_files_with_extension(&output_path, "mp4");
-        assert_eq!(mp4_count, 0, "JPG mode should not create MP4 files");
+        assert_eq!(mp4_count, 0, "JPEG mode should not create MP4 files");
     }
 
     #[test]
@@ -720,19 +930,21 @@ mod output_mode {
         let temp_dir = TempDir::new().unwrap();
         let output_path = temp_dir.path().join("output");
 
-        let output = run_cli(&[
-            "--in",
-            example.to_str().unwrap(),
-            "--out",
-            output_path.to_str().unwrap(),
-            "--video",
-            "--force",
-        ]);
+        let output = run_convert(
+            "video",
+            &[
+                "--in",
+                example.to_str().unwrap(),
+                "--out",
+                output_path.to_str().unwrap(),
+                "--force",
+            ],
+            &[],
+        );
 
         assert!(output.status.success());
 
-        // Note: Video mode uses temp dir for JPGs, then converts
-        // After conversion, output should only have MP4s
+        // Video mode uses temp dir for JPGs, then converts
         let jpg_count = count_files_with_extension(&output_path, "jpg");
         assert_eq!(jpg_count, 0, "Video mode should not leave JPG files");
     }
@@ -751,12 +963,16 @@ mod empty_input {
         let temp_output = TempDir::new().unwrap();
         let output_path = temp_output.path().join("output");
 
-        let output = run_cli(&[
-            "--in",
-            temp_input.path().to_str().unwrap(),
-            "--out",
-            output_path.to_str().unwrap(),
-        ]);
+        let output = run_convert(
+            "jpeg",
+            &[
+                "--in",
+                temp_input.path().to_str().unwrap(),
+                "--out",
+                output_path.to_str().unwrap(),
+            ],
+            &[],
+        );
 
         assert!(output.status.success());
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -773,12 +989,16 @@ mod empty_input {
         let temp_output = TempDir::new().unwrap();
         let output_path = temp_output.path().join("output");
 
-        let output = run_cli(&[
-            "--in",
-            temp_input.path().to_str().unwrap(),
-            "--out",
-            output_path.to_str().unwrap(),
-        ]);
+        let output = run_convert(
+            "jpeg",
+            &[
+                "--in",
+                temp_input.path().to_str().unwrap(),
+                "--out",
+                output_path.to_str().unwrap(),
+            ],
+            &[],
+        );
 
         assert!(output.status.success());
 
@@ -810,15 +1030,19 @@ mod split_by {
         let temp_dir = TempDir::new().unwrap();
         let output_path = temp_dir.path().join("output");
 
-        let output = run_cli(&[
-            "--in",
-            example.to_str().unwrap(),
-            "--out",
-            output_path.to_str().unwrap(),
-            "--split-by",
-            "series-number",
-            "--force",
-        ]);
+        let output = run_convert(
+            "jpeg",
+            &[
+                "--in",
+                example.to_str().unwrap(),
+                "--out",
+                output_path.to_str().unwrap(),
+                "--split-by",
+                "series-number",
+                "--force",
+            ],
+            &[],
+        );
 
         assert!(output.status.success());
 
@@ -847,15 +1071,19 @@ mod split_by {
         let temp_dir = TempDir::new().unwrap();
         let output_path = temp_dir.path().join("output");
 
-        let output = run_cli(&[
-            "--in",
-            example.to_str().unwrap(),
-            "--out",
-            output_path.to_str().unwrap(),
-            "--split-by",
-            "description",
-            "--force",
-        ]);
+        let output = run_convert(
+            "jpeg",
+            &[
+                "--in",
+                example.to_str().unwrap(),
+                "--out",
+                output_path.to_str().unwrap(),
+                "--split-by",
+                "description",
+                "--force",
+            ],
+            &[],
+        );
 
         assert!(output.status.success());
 
@@ -877,13 +1105,17 @@ mod split_by {
         let temp_dir = TempDir::new().unwrap();
         let output_path = temp_dir.path().join("output");
 
-        let output = run_cli(&[
-            "--in",
-            example.to_str().unwrap(),
-            "--out",
-            output_path.to_str().unwrap(),
-            "--force",
-        ]);
+        let output = run_convert(
+            "jpeg",
+            &[
+                "--in",
+                example.to_str().unwrap(),
+                "--out",
+                output_path.to_str().unwrap(),
+                "--force",
+            ],
+            &[],
+        );
 
         assert!(output.status.success());
 

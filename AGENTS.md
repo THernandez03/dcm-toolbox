@@ -4,11 +4,11 @@ This document provides context for AI coding assistants (GitHub Copilot, Claude,
 
 ## Project Overview
 
-**DCM Toolbox** is a Rust CLI tool for converting DICOM medical image files to JPEG images or MP4 videos. It focuses on batch processing with intelligent series splitting based on DICOM metadata tags.
+**DCM Toolbox** is a Rust CLI tool for converting DICOM medical image files to JPEG images, MP4 videos, or STL 3D models. It focuses on batch processing with intelligent series splitting based on DICOM metadata tags.
 
 ### Core Purpose
 
-1. **Convert** DICOM files to JPEG or MP4
+1. **Convert** DICOM files to JPEG, MP4, or STL
 2. **Analyze** DICOM metadata to identify optimal splitting strategies
 3. **Organize** output by series/groups based on configurable DICOM tags
 
@@ -16,20 +16,29 @@ This document provides context for AI coding assistants (GitHub Copilot, Claude,
 
 ```
 src/
-├── main.rs      # CLI entry point, argument parsing (clap)
-├── convert.rs   # DICOM → JPEG/MP4 conversion logic
-├── analyze.rs   # DICOM metadata analysis and recommendations
-└── utils.rs     # Shared utilities (validation, sanitization, prompts)
+├── main.rs           # CLI entry point, argument parsing (clap)
+├── analyze.rs        # DICOM metadata analysis and recommendations
+├── convert.rs        # Shared pipeline (grouping, sorting, CLI types)
+├── convert/
+│   ├── jpeg.rs       # DICOM → JPEG image conversion
+│   ├── video.rs      # DICOM → MP4 video conversion (via ffmpeg)
+│   └── stl.rs        # DICOM → STL 3D model (Marching Cubes)
+└── utils.rs          # Shared utilities (validation, sanitization, prompts)
 ```
+
+The project follows the [modern Rust module style](https://doc.rust-lang.org/book/ch07-05-separating-modules-into-different-files.html): `convert.rs` alongside `convert/` directory (not `convert/mod.rs`).
 
 ### Module Responsibilities
 
-| Module       | Purpose                                                                                       |
-| ------------ | --------------------------------------------------------------------------------------------- |
-| `main.rs`    | Defines CLI structure with `clap`. Parses args and dispatches to subcommands.                 |
-| `convert.rs` | Handles file grouping by tags, sorting by Z-position, JPEG export, and ffmpeg video encoding. |
-| `analyze.rs` | Reads DICOM tags across files, counts unique values, and recommends the best split strategy.  |
-| `utils.rs`   | Input validation, filename sanitization, folder cleanup prompts, and file operations.         |
+| Module             | Purpose                                                                                         |
+| ------------------ | ----------------------------------------------------------------------------------------------- |
+| `main.rs`          | Defines nested CLI structure with `clap`. Parses args and dispatches to subcommands.            |
+| `convert.rs`       | Shared pipeline (`prepare_groups`), file grouping by tags, sorting by Z-pos, CLI type defs.     |
+| `convert/jpeg.rs`  | JPEG conversion: decodes DICOM pixel data and saves as sequentially-numbered JPG files.         |
+| `convert/video.rs` | Video conversion: renders frames to temp PNGs, encodes to MP4 via ffmpeg.                       |
+| `convert/stl.rs`   | Volume building from DICOM slices, Otsu thresholding, Gaussian smoothing, Marching Cubes → STL. |
+| `analyze.rs`       | Reads DICOM tags across files, counts unique values, and recommends the best split strategy.    |
+| `utils.rs`         | Input validation, filename sanitization, folder cleanup prompts, and file operations.           |
 
 ## Key Dependencies
 
@@ -41,6 +50,9 @@ src/
 | `image`           | Image manipulation and format conversion      |
 | `anyhow`          | Error handling with context                   |
 | `tempfile`        | Temporary directories for video frame staging |
+| `mcubes`          | Marching Cubes 3D surface extraction          |
+| `stl_io`          | Binary STL file I/O                           |
+| `lin_alg`         | Linear algebra types (Vec3) for mcubes        |
 
 ### External Dependency
 
@@ -85,6 +97,8 @@ fs::read_dir(input)?;
 ### CLI Patterns
 
 - Use `clap` derive macros for argument definitions
+- Nested subcommands: `convert jpeg/video/stl` with shared options flattened via `ConvertShared`
+- Format-specific options live on the `ConvertFormat` enum variants
 - Default values should be sensible for typical medical imaging use cases
 - Provide both long (`--option`) and short (`-o`) flags for common options
 
@@ -148,17 +162,19 @@ Minimum Supported Rust Version: **1.92.0** (see `clippy.toml`)
 
 ### Adding a New Split-By Option
 
-1. Add variant to `SplitBy` enum in `main.rs`
+1. Add variant to `SplitBy` enum in `convert.rs`
 2. Add corresponding DICOM tag lookup in `convert.rs` → `run()` function
 3. Add tag analysis in `analyze.rs` → `run()` function
 4. Update CLI help text with tag reference `(XXXX,XXXX)`
 
 ### Adding a New Output Format
 
-1. Create conversion function in `convert.rs` (follow `convert_to_jpgs` pattern)
-2. Add CLI flag in `main.rs` under `Commands::Convert`
-3. Branch in `convert.rs` → `run()` based on flag
-4. Handle temporary files if needed (use `tempfile` crate)
+1. Create a new module `convert/<format>.rs` with a `pub(super) fn convert_to_<format>()` function
+2. Add `mod <format>;` declaration in `convert.rs`
+3. Add a variant to `ConvertFormat` enum in `convert.rs` with format-specific options
+4. Add dispatch branch in `convert.rs` → `run()` match on `ConvertFormat`
+5. Handle temporary files if needed (use `tempfile` crate)
+6. Update integration tests with new `run_convert("format", ...)` calls
 
 ### Modifying Video Encoding
 
@@ -169,7 +185,7 @@ Video encoding uses ffmpeg with these settings:
 - Preset: `slow` (better compression)
 - Pixel format: `yuv420p` (compatibility)
 
-Modify in `convert_to_video()` function. Test with various DICOM sources.
+Modify in `convert/video.rs` → `convert_to_video()` function. Test with various DICOM sources.
 
 ## File Flow
 
@@ -184,8 +200,8 @@ Input (.dcm files)
          │
          ▼
 ┌──────────────────┐
-│  Group by Tag    │  HashMap<String, Vec<PathBuf>>
-│  (split-by)      │
+│  Group by Tag    │  prepare_groups() in convert.rs
+│  (split-by)      │  HashMap<String, Vec<PathBuf>>
 └────────┬─────────┘
          │
          ▼
@@ -194,19 +210,19 @@ Input (.dcm files)
 │  (slice order)   │
 └────────┬─────────┘
          │
-    ┌────┴────┐
-    │         │
-    ▼         ▼
-┌───────┐ ┌───────┐
-│ JPEG  │ │ Video │
-│ Export│ │ (MP4) │
-└───────┘ └───────┘
-            │
-            ▼
-      ┌───────────┐
-      │  ffmpeg   │
-      │  encode   │
-      └───────────┘
+    ┌────┼────────┐
+    │    │        │
+    ▼    ▼        ▼
+┌─────┐┌─────┐┌──────────┐
+│JPEG ││Video││  STL     │
+│     ││(MP4)││ (3D Mesh)│
+└─────┘└──┬──┘└────┬─────┘
+          │        │
+          ▼        ▼
+     ┌────────┐┌───────────────┐
+     │ ffmpeg ││ Marching Cubes│
+     │ encode ││ → binary STL  │
+     └────────┘└───────────────┘
 ```
 
 ## Important Considerations
@@ -257,8 +273,17 @@ Check error message for specific file and failure reason.
 - Check ffmpeg stderr output in error messages
 - Verify frame dimensions are consistent (auto-resized to first frame)
 
+### STL Issues
+
+- Need at least 5 slices for 3D reconstruction
+- If Marching Cubes produces no triangles, adjust `--iso-level`
+- Use `--smooth 0` to disable Gaussian smoothing for raw output
+- mcubes uses X-fastest value indexing: `values[x + y * cols + z * cols * rows]`
+
 ## References
 
 - [DICOM Standard](https://www.dicomstandard.org/)
 - [dicom-rs Documentation](https://docs.rs/dicom/latest/dicom/)
 - [FFmpeg Documentation](https://ffmpeg.org/documentation.html)
+- [mcubes Documentation](https://docs.rs/mcubes/0.1.7/mcubes/)
+- [STL File Format](<https://en.wikipedia.org/wiki/STL_(file_format)>)
