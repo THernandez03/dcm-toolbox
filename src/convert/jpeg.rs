@@ -7,25 +7,24 @@ use dicom::object::open_file;
 use dicom_pixeldata::PixelDecoder;
 use image::ImageFormat;
 
-pub(super) fn convert_to_jpgs(dcm_files: &[PathBuf], output_dir: &Path) -> Result<()> {
+pub(super) fn convert_to_jpgs(dcm_files: &[PathBuf], output_dir: &Path) {
     let total = dcm_files.len();
     let padding = total.to_string().len().max(4); // At least 4 digits
 
     for (idx, dcm_path) in dcm_files.iter().enumerate() {
         match convert_dcm_to_jpg(dcm_path, output_dir, idx + 1, padding) {
             Ok(output_path) => println!(
-                "✓ Converted: {:?} -> {:?}",
-                dcm_path.file_name().unwrap(),
-                output_path.file_name().unwrap()
+                "✓ Converted: {} -> {}",
+                dcm_path.file_name().unwrap().display(),
+                output_path.file_name().unwrap().display()
             ),
             Err(e) => eprintln!(
-                "✗ Failed to convert {:?}: {}",
-                dcm_path.file_name().unwrap(),
+                "✗ Failed to convert {}: {}",
+                dcm_path.file_name().unwrap().display(),
                 e
             ),
         }
     }
-    Ok(())
 }
 
 fn convert_dcm_to_jpg(
@@ -35,21 +34,21 @@ fn convert_dcm_to_jpg(
     padding: usize,
 ) -> Result<PathBuf> {
     let dicom_obj =
-        open_file(dcm_path).with_context(|| format!("Failed to open DICOM file: {dcm_path:?}"))?;
+        open_file(dcm_path).with_context(|| format!("Failed to open DICOM file: {}", dcm_path.display()))?;
 
     let pixel_data = dicom_obj
         .decode_pixel_data()
-        .with_context(|| format!("Failed to decode pixel data from: {dcm_path:?}"))?;
+        .with_context(|| format!("Failed to decode pixel data from: {}", dcm_path.display()))?;
 
     let dynamic_image = pixel_data
         .to_dynamic_image(0)
-        .with_context(|| format!("Failed to convert to image: {dcm_path:?}"))?;
+        .with_context(|| format!("Failed to convert to image: {}", dcm_path.display()))?;
 
     let output_path = output_dir.join(format!("{index:0padding$}.jpg"));
 
     dynamic_image
         .save_with_format(&output_path, ImageFormat::Jpeg)
-        .with_context(|| format!("Failed to save JPG: {output_path:?}"))?;
+        .with_context(|| format!("Failed to save JPG: {}", output_path.display()))?;
 
     Ok(output_path)
 }
@@ -71,11 +70,10 @@ mod tests {
         ];
 
         for (index, padding, expected) in test_cases {
-            let filename = format!("{:0width$}.jpg", index, width = padding);
+            let filename = format!("{index:0padding$}.jpg");
             assert_eq!(
                 filename, expected,
-                "Index {} with padding {}",
-                index, padding
+                "Index {index} with padding {padding}"
             );
         }
     }
@@ -94,10 +92,7 @@ mod tests {
             let padding = count.to_string().len().max(4);
             assert!(
                 padding >= expected_min_padding,
-                "Count {} should have at least {} padding, got {}",
-                count,
-                expected_min_padding,
-                padding
+                "Count {count} should have at least {expected_min_padding} padding, got {padding}"
             );
         }
     }
@@ -106,20 +101,19 @@ mod tests {
     fn padding_is_always_at_least_4_digits() {
         for count in [1, 2, 5, 9, 10, 50, 99, 100, 500, 999] {
             let padding = count.to_string().len().max(4);
-            assert_eq!(padding, 4, "Count {} should have padding 4", count);
+            assert_eq!(padding, 4, "Count {count} should have padding 4");
         }
     }
 
     #[test]
     fn padding_increases_for_large_counts() {
-        let test_cases = [(10000, 5), (100000, 6), (1000000, 7)];
+        let test_cases = [(10_000, 5), (100_000, 6), (1_000_000, 7)];
 
         for (count, expected_padding) in test_cases {
             let padding = count.to_string().len().max(4);
             assert_eq!(
                 padding, expected_padding,
-                "Count {} should have padding {}",
-                count, expected_padding
+                "Count {count} should have padding {expected_padding}"
             );
         }
     }
@@ -134,9 +128,7 @@ mod tests {
             let filename = format!("{index:0padding$}.jpg");
             assert!(
                 filename.starts_with(expected_prefix),
-                "Index {} should produce filename starting with {}",
-                index,
-                expected_prefix
+                "Index {index} should produce filename starting with {expected_prefix}"
             );
         }
     }

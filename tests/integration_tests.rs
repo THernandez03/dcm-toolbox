@@ -69,7 +69,7 @@ fn ffmpeg_available() -> bool {
 fn count_files_with_extension(dir: &PathBuf, ext: &str) -> usize {
     let mut count = 0;
     if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.filter_map(|e| e.ok()) {
+        for entry in entries.filter_map(std::result::Result::ok) {
             let path = entry.path();
             if path.is_dir() {
                 count += count_files_with_extension(&path, ext);
@@ -88,7 +88,7 @@ fn get_subdirs(dir: &PathBuf) -> Vec<PathBuf> {
     }
     fs::read_dir(dir)
         .unwrap()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .map(|e| e.path())
         .filter(|p| p.is_dir())
         .collect()
@@ -156,8 +156,7 @@ mod cli_args {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
             stderr.contains("does not exist") || stderr.contains("Error"),
-            "Expected error about nonexistent folder: {}",
-            stderr
+            "Expected error about nonexistent folder: {stderr}"
         );
     }
 
@@ -232,7 +231,7 @@ mod jpg_conversion {
             &[],
         );
 
-        assert!(output.status.success(), "CLI failed: {:?}", output);
+        assert!(output.status.success(), "CLI failed: {output:?}");
         assert!(output_path.exists(), "Output folder should exist");
 
         // Should have series subfolders (not JPGs directly in output)
@@ -276,9 +275,13 @@ mod jpg_conversion {
         for subdir in get_subdirs(&output_path) {
             let mut filenames: Vec<String> = fs::read_dir(&subdir)
                 .unwrap()
-                .filter_map(|e| e.ok())
+                .filter_map(std::result::Result::ok)
                 .filter_map(|e| e.file_name().into_string().ok())
-                .filter(|name| name.ends_with(".jpg"))
+                .filter(|name| {
+                    std::path::Path::new(name)
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("jpg"))
+                })
                 .collect();
 
             if filenames.is_empty() {
@@ -293,8 +296,7 @@ mod jpg_conversion {
                 let file_num: usize = name.trim_end_matches(".jpg").parse().unwrap_or(0);
                 assert_eq!(
                     file_num, expected_num,
-                    "File {} should be numbered {}",
-                    name, expected_num
+                    "File {name} should be numbered {expected_num}"
                 );
             }
         }
@@ -349,8 +351,7 @@ mod jpg_conversion {
         for subdir in get_subdirs(&output_path) {
             assert!(
                 !subdir.join("old_file.txt").exists(),
-                "Old files should be cleaned from {:?}",
-                subdir
+                "Old files should be cleaned from {subdir:?}"
             );
         }
     }
@@ -473,14 +474,13 @@ mod jpg_conversion {
         for subdir in &subdirs {
             let jpg_count: usize = fs::read_dir(subdir)
                 .unwrap()
-                .filter_map(|e| e.ok())
+                .filter_map(std::result::Result::ok)
                 .filter(|e| e.path().extension().is_some_and(|ext| ext == "jpg"))
                 .count();
 
             assert!(
                 jpg_count > 0,
-                "Series folder {:?} should have JPG files",
-                subdir
+                "Series folder {subdir:?} should have JPG files"
             );
         }
     }
@@ -520,7 +520,7 @@ mod video_conversion {
             &[],
         );
 
-        assert!(output.status.success(), "CLI failed: {:?}", output);
+        assert!(output.status.success(), "CLI failed: {output:?}");
         assert!(output_path.exists(), "Output folder should exist");
 
         // Videos should be in series subfolders, named after the folder
@@ -536,8 +536,7 @@ mod video_conversion {
 
             assert!(
                 video_file.exists(),
-                "Video file should exist at {:?}",
-                video_file
+                "Video file should exist at {video_file:?}"
             );
 
             // Check file size is reasonable (> 1KB)
@@ -618,8 +617,7 @@ mod video_conversion {
 
             assert!(
                 expected_video.exists(),
-                "Video should be named {folder_name}.mp4 in {:?}",
-                subdir
+                "Video should be named {folder_name}.mp4 in {subdir:?}"
             );
         }
     }
@@ -713,7 +711,7 @@ mod stl_conversion {
             &[],
         );
 
-        assert!(output.status.success(), "CLI failed: {:?}", output);
+        assert!(output.status.success(), "CLI failed: {output:?}");
         assert!(output_path.exists(), "Output folder should exist");
 
         // STL files should be in series subfolders, named after the folder
@@ -727,7 +725,7 @@ mod stl_conversion {
             let folder_name = subdir.file_name().unwrap().to_str().unwrap();
             let stl_file = subdir.join(format!("{folder_name}.stl"));
 
-            assert!(stl_file.exists(), "STL file should exist at {:?}", stl_file);
+            assert!(stl_file.exists(), "STL file should exist at {stl_file:?}");
 
             // Check file size is reasonable (> 84 bytes = STL header)
             let metadata = fs::metadata(&stl_file).unwrap();
@@ -833,7 +831,7 @@ mod output_mode {
         // No JPGs directly in output root
         let root_jpgs: usize = fs::read_dir(&output_path)
             .unwrap()
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .filter(|e| e.path().extension().is_some_and(|ext| ext == "jpg"))
             .count();
         assert_eq!(root_jpgs, 0, "JPGs should not be in root output folder");
@@ -882,8 +880,7 @@ mod output_mode {
             let video_file = subdir.join(format!("{folder_name}.mp4"));
             assert!(
                 video_file.is_file(),
-                "Should have {folder_name}.mp4 in {:?}",
-                subdir
+                "Should have {folder_name}.mp4 in {subdir:?}"
             );
         }
     }
@@ -978,8 +975,7 @@ mod empty_input {
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
             stdout.contains("No .dcm files"),
-            "Should indicate no DCM files found: {}",
-            stdout
+            "Should indicate no DCM files found: {stdout}"
         );
     }
 
@@ -1055,8 +1051,7 @@ mod split_by {
             // Either numeric or "unknown"
             assert!(
                 name.parse::<i32>().is_ok() || name == "unknown",
-                "Folder name should be numeric or 'unknown': {}",
-                name
+                "Folder name should be numeric or 'unknown': {name}"
             );
         }
     }
@@ -1090,8 +1085,7 @@ mod split_by {
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
             stdout.contains("Splitting by") || stdout.contains("Description"),
-            "Should indicate split-by mode: {}",
-            stdout
+            "Should indicate split-by mode: {stdout}"
         );
     }
 
@@ -1122,8 +1116,7 @@ mod split_by {
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
             stdout.contains("SeriesNumber") || stdout.contains("series-number"),
-            "Default should be series-number: {}",
-            stdout
+            "Default should be series-number: {stdout}"
         );
     }
 }

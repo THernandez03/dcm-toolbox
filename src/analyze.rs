@@ -24,11 +24,12 @@ pub struct AnalyzeArgs {
 }
 
 /// Analyze DICOM files to find distinguishing tags for different cuts/series.
+#[allow(clippy::too_many_lines)]
 pub fn run(args: &AnalyzeArgs) -> Result<()> {
     validate_input_folder(&args.input)?;
 
     let entries = fs::read_dir(&args.input)
-        .with_context(|| format!("Failed to read input folder: {:?}", args.input))?;
+        .with_context(|| format!("Failed to read input folder: {}", args.input.display()))?;
 
     let dcm_files: Vec<PathBuf> = entries
         .filter_map(std::result::Result::ok)
@@ -42,7 +43,7 @@ pub fn run(args: &AnalyzeArgs) -> Result<()> {
         .collect();
 
     if dcm_files.is_empty() {
-        println!("No .dcm files found in {:?}", args.input);
+        println!("No .dcm files found in {}", args.input.display());
         return Ok(());
     }
 
@@ -59,41 +60,35 @@ pub fn run(args: &AnalyzeArgs) -> Result<()> {
     for dcm_path in &dcm_files {
         if let Ok(obj) = open_file(dcm_path) {
             // SeriesInstanceUID
-            if let Ok(val) = obj.element(tags::SERIES_INSTANCE_UID) {
-                if let Ok(s) = val.to_str() {
+            if let Ok(val) = obj.element(tags::SERIES_INSTANCE_UID)
+                && let Ok(s) = val.to_str() {
                     *series_uid_map.entry(s.to_string()).or_insert(0) += 1;
                 }
-            }
             // SeriesNumber
-            if let Ok(val) = obj.element(tags::SERIES_NUMBER) {
-                if let Ok(s) = val.to_str() {
+            if let Ok(val) = obj.element(tags::SERIES_NUMBER)
+                && let Ok(s) = val.to_str() {
                     *series_number_map.entry(s.to_string()).or_insert(0) += 1;
                 }
-            }
             // AcquisitionNumber
-            if let Ok(val) = obj.element(tags::ACQUISITION_NUMBER) {
-                if let Ok(s) = val.to_str() {
+            if let Ok(val) = obj.element(tags::ACQUISITION_NUMBER)
+                && let Ok(s) = val.to_str() {
                     *acquisition_number_map.entry(s.to_string()).or_insert(0) += 1;
                 }
-            }
             // SeriesDescription
-            if let Ok(val) = obj.element(tags::SERIES_DESCRIPTION) {
-                if let Ok(s) = val.to_str() {
+            if let Ok(val) = obj.element(tags::SERIES_DESCRIPTION)
+                && let Ok(s) = val.to_str() {
                     *series_description_map.entry(s.to_string()).or_insert(0) += 1;
                 }
-            }
             // ImageOrientationPatient
-            if let Ok(val) = obj.element(tags::IMAGE_ORIENTATION_PATIENT) {
-                if let Ok(s) = val.to_str() {
+            if let Ok(val) = obj.element(tags::IMAGE_ORIENTATION_PATIENT)
+                && let Ok(s) = val.to_str() {
                     *orientation_map.entry(s.to_string()).or_insert(0) += 1;
                 }
-            }
             // StackID (private tag 0020,9056)
-            if let Ok(val) = obj.element(dicom::core::Tag(0x0020, 0x9056)) {
-                if let Ok(s) = val.to_str() {
+            if let Ok(val) = obj.element(dicom::core::Tag(0x0020, 0x9056))
+                && let Ok(s) = val.to_str() {
                     *stack_id_map.entry(s.to_string()).or_insert(0) += 1;
                 }
-            }
         }
     }
 
@@ -107,7 +102,7 @@ pub fn run(args: &AnalyzeArgs) -> Result<()> {
         let mut entries: Vec<_> = series_uid_map.iter().collect();
         entries.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
         for (uid, count) in entries {
-            println!("  - {} files: {}", count, uid);
+            println!("  - {count} files: {uid}");
         }
     }
     println!();
@@ -124,7 +119,7 @@ pub fn run(args: &AnalyzeArgs) -> Result<()> {
                 .cmp(&b.parse::<i32>().unwrap_or(0))
         });
         for (num, count) in entries {
-            println!("  - Series {}: {} files", num, count);
+            println!("  - Series {num}: {count} files");
         }
     }
     println!();
@@ -141,7 +136,7 @@ pub fn run(args: &AnalyzeArgs) -> Result<()> {
                 .cmp(&b.parse::<i32>().unwrap_or(0))
         });
         for (num, count) in entries {
-            println!("  - Acquisition {}: {} files", num, count);
+            println!("  - Acquisition {num}: {count} files");
         }
     }
     println!();
@@ -154,7 +149,7 @@ pub fn run(args: &AnalyzeArgs) -> Result<()> {
         let mut entries: Vec<_> = series_description_map.iter().collect();
         entries.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
         for (desc, count) in entries {
-            println!("  - \"{}\": {} files", desc, count);
+            println!("  - \"{desc}\": {count} files");
         }
     }
     println!();
@@ -167,7 +162,7 @@ pub fn run(args: &AnalyzeArgs) -> Result<()> {
         let mut entries: Vec<_> = orientation_map.iter().collect();
         entries.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
         for (orientation, count) in entries {
-            println!("  - {} files: {}", count, orientation);
+            println!("  - {count} files: {orientation}");
         }
     }
     println!();
@@ -181,7 +176,7 @@ pub fn run(args: &AnalyzeArgs) -> Result<()> {
                 .cmp(&b.parse::<i32>().unwrap_or(0))
         });
         for (id, count) in entries {
-            println!("  - Stack {}: {} files", id, count);
+            println!("  - Stack {id}: {count} files");
         }
     }
     println!();
@@ -218,15 +213,14 @@ pub fn run(args: &AnalyzeArgs) -> Result<()> {
     ];
 
     if let Some(expected) = args.expected_groups {
-        println!("Looking for tag with exactly {} unique values:", expected);
+        println!("Looking for tag with exactly {expected} unique values:");
         for (name, flag, count) in candidates {
             if count == expected {
                 println!(
-                    "  ✓ {} has {} unique values - MATCH! Use: {}",
-                    name, count, flag
+                    "  ✓ {name} has {count} unique values - MATCH! Use: {flag}"
                 );
             } else if count > 1 && count <= 50 {
-                println!("  - {} has {} unique values", name, count);
+                println!("  - {name} has {count} unique values");
             }
         }
     } else {
@@ -235,11 +229,10 @@ pub fn run(args: &AnalyzeArgs) -> Result<()> {
         );
         for (name, flag, count) in candidates {
             if count > 1 && count <= 50 {
-                println!("  - {} has {} unique values ({})", name, count, flag);
+                println!("  - {name} has {count} unique values ({flag})");
             } else if count > 50 {
                 println!(
-                    "  - {} has {} unique values (too many to list)",
-                    name, count
+                    "  - {name} has {count} unique values (too many to list)"
                 );
             }
         }
@@ -443,12 +436,7 @@ mod tests {
             let candidates = [("SeriesUID", 3), ("SeriesNumber", 5), ("Description", 10)];
 
             let expected = 7;
-            let exact_matches: Vec<_> = candidates
-                .iter()
-                .filter(|(_, count)| *count == expected)
-                .collect();
-
-            assert!(exact_matches.is_empty());
+            assert!(!candidates.iter().any(|(_, count)| *count == expected));
         }
 
         #[test]
@@ -513,7 +501,7 @@ mod tests {
         fn format_series_number_output() {
             let series_num = "5";
             let count = 30;
-            let formatted = format!("  - Series {}: {} files", series_num, count);
+            let formatted = format!("  - Series {series_num}: {count} files");
             assert_eq!(formatted, "  - Series 5: 30 files");
         }
 
@@ -521,7 +509,7 @@ mod tests {
         fn format_series_description_output() {
             let description = "T2W FLAIR";
             let count = 25;
-            let formatted = format!("  - \"{}\": {} files", description, count);
+            let formatted = format!("  - \"{description}\": {count} files");
             assert_eq!(formatted, "  - \"T2W FLAIR\": 25 files");
         }
 
@@ -529,7 +517,7 @@ mod tests {
         fn format_uid_output() {
             let uid = "1.2.3.4.5.6.7.8.9";
             let count = 100;
-            let formatted = format!("  - {} files: {}", count, uid);
+            let formatted = format!("  - {count} files: {uid}");
             assert_eq!(formatted, "  - 100 files: 1.2.3.4.5.6.7.8.9");
         }
 
@@ -537,7 +525,7 @@ mod tests {
         fn format_stack_id_output() {
             let stack_id = "1";
             let count = 50;
-            let formatted = format!("  - Stack {}: {} files", stack_id, count);
+            let formatted = format!("  - Stack {stack_id}: {count} files");
             assert_eq!(formatted, "  - Stack 1: 50 files");
         }
     }
@@ -621,7 +609,7 @@ mod tests {
                 let is_dcm = path
                     .extension()
                     .is_some_and(|ext| ext.eq_ignore_ascii_case("dcm"));
-                assert!(!is_dcm, "Path {:?} should not match DCM", path);
+                assert!(!is_dcm, "Path {path:?} should not match DCM");
             }
         }
 

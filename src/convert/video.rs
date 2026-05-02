@@ -50,20 +50,20 @@ pub(super) fn convert_to_video(dcm_files: &[PathBuf], output_dir: &Path, fps: u3
                 // Save as PNG with zero-padded numbering for ffmpeg
                 let frame_path = temp_path.join(format!("frame_{idx:06}.png"));
                 img.save_with_format(&frame_path, ImageFormat::Png)
-                    .with_context(|| format!("Failed to save frame: {frame_path:?}"))?;
+                    .with_context(|| format!("Failed to save frame: {}", frame_path.display()))?;
 
                 frame_count += 1;
                 println!(
-                    "✓ Prepared frame {}/{}: {:?}",
+                    "✓ Prepared frame {}/{}: {}",
                     idx + 1,
                     dcm_files.len(),
-                    dcm_path.file_name().unwrap()
+                    dcm_path.file_name().unwrap().display()
                 );
             }
             Err(e) => {
                 eprintln!(
-                    "✗ Failed to load {:?}: {}",
-                    dcm_path.file_name().unwrap(),
+                    "✗ Failed to load {}: {}",
+                    dcm_path.file_name().unwrap().display(),
                     e
                 );
             }
@@ -85,10 +85,10 @@ pub(super) fn convert_to_video(dcm_files: &[PathBuf], output_dir: &Path, fps: u3
     let frame_pattern = temp_path.join("frame_%06d.png");
     let frame_pattern_str = frame_pattern
         .to_str()
-        .with_context(|| format!("Frame pattern path is not valid UTF-8: {frame_pattern:?}"))?;
+        .with_context(|| format!("Frame pattern path is not valid UTF-8: {}", frame_pattern.display()))?;
     let video_path_str = video_path
         .to_str()
-        .with_context(|| format!("Video output path is not valid UTF-8: {video_path:?}"))?;
+        .with_context(|| format!("Video output path is not valid UTF-8: {}", video_path.display()))?;
 
     let output = Command::new("ffmpeg")
         .args([
@@ -117,7 +117,7 @@ pub(super) fn convert_to_video(dcm_files: &[PathBuf], output_dir: &Path, fps: u3
         anyhow::bail!("ffmpeg encoding failed: {stderr}");
     }
 
-    println!("\n✓ Video saved to: {:?}", video_path);
+    println!("\n✓ Video saved to: {}", video_path.display());
     println!("  Total frames: {frame_count}");
     println!(
         "  Duration: {:.2}s",
@@ -145,14 +145,10 @@ mod tests {
             ];
 
             for (frame_count, fps, expected_min_duration) in test_cases {
-                let duration = frame_count as f64 / fps as f64;
+                let duration = f64::from(frame_count) / f64::from(fps);
                 assert!(
                     duration >= expected_min_duration - 0.001,
-                    "Frame count {} at {} fps should be at least {} seconds, got {}",
-                    frame_count,
-                    fps,
-                    expected_min_duration,
-                    duration
+                    "Frame count {frame_count} at {fps} fps should be at least {expected_min_duration} seconds, got {duration}"
                 );
             }
         }
@@ -167,13 +163,10 @@ mod tests {
             ];
 
             for (frame_count, fps, expected_duration) in test_cases {
-                let duration = frame_count as f64 / fps as f64;
+                let duration = f64::from(frame_count) / f64::from(fps);
                 assert!(
                     (duration - expected_duration).abs() < 0.001,
-                    "Frame count {} at {} fps should be {} seconds",
-                    frame_count,
-                    fps,
-                    expected_duration
+                    "Frame count {frame_count} at {fps} fps should be {expected_duration} seconds"
                 );
             }
         }
@@ -188,7 +181,7 @@ mod tests {
             ];
 
             for (frame_count, fps, _description) in scenarios {
-                let duration = frame_count as f64 / fps as f64;
+                let duration = f64::from(frame_count) / f64::from(fps);
                 assert!(duration > 0.0, "Duration should always be positive");
             }
         }
@@ -205,7 +198,7 @@ mod tests {
             let test_cases = [
                 (0, "frame_000000.png"),
                 (1, "frame_000001.png"),
-                (999999, "frame_999999.png"),
+                (999_999, "frame_999999.png"),
             ];
 
             for (idx, expected) in test_cases {

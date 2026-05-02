@@ -46,6 +46,7 @@ struct VolumeData {
 }
 
 /// Convert a group of sorted DICOM files into a binary STL 3D model.
+#[allow(clippy::cast_precision_loss)]
 pub fn convert_to_stl(
     dcm_files: &[PathBuf],
     output_dir: &Path,
@@ -129,7 +130,7 @@ pub fn convert_to_stl(
     let stl_path = output_dir.join(format!("{stl_name}.stl"));
     write_stl_file(&mesh, &stl_path)?;
 
-    println!("✓ STL saved to: {stl_path:?}");
+    println!("✓ STL saved to: {}", stl_path.display());
     Ok(())
 }
 
@@ -137,10 +138,11 @@ pub fn convert_to_stl(
 ///
 /// Each slice is converted to 8-bit grayscale. Pixel spacing and slice
 /// thickness are extracted from DICOM metadata when available.
+#[allow(clippy::cast_possible_truncation)]
 fn build_volume(dcm_files: &[PathBuf]) -> Result<VolumeData> {
     // Read metadata from the first file to establish dimensions
     let first_obj = open_file(&dcm_files[0])
-        .with_context(|| format!("Failed to open first DICOM file: {:?}", dcm_files[0]))?;
+        .with_context(|| format!("Failed to open first DICOM file: {}", dcm_files[0].display()))?;
 
     let rows = first_obj
         .element(tags::ROWS)
@@ -191,25 +193,25 @@ fn build_volume(dcm_files: &[PathBuf]) -> Result<VolumeData> {
 
     for (z, dcm_path) in dcm_files.iter().enumerate() {
         let dicom_obj = open_file(dcm_path)
-            .with_context(|| format!("Failed to open DICOM file: {dcm_path:?}"))?;
+            .with_context(|| format!("Failed to open DICOM file: {}", dcm_path.display()))?;
 
         let pixel_data = dicom_obj
             .decode_pixel_data()
-            .with_context(|| format!("Failed to decode pixel data: {dcm_path:?}"))?;
+            .with_context(|| format!("Failed to decode pixel data: {}", dcm_path.display()))?;
 
         let img = pixel_data
             .to_dynamic_image(0)
-            .with_context(|| format!("Failed to convert to image: {dcm_path:?}"))?;
+            .with_context(|| format!("Failed to convert to image: {}", dcm_path.display()))?;
 
         let gray = img.to_luma8();
 
         // Ensure consistent dimensions
         if gray.width() as usize != cols || gray.height() as usize != rows {
             anyhow::bail!(
-                "Inconsistent slice dimensions: expected {cols}x{rows}, got {}x{} in {:?}",
+                "Inconsistent slice dimensions: expected {cols}x{rows}, got {}x{} in {}",
                 gray.width(),
                 gray.height(),
-                dcm_path
+                dcm_path.display()
             );
         }
 
@@ -225,10 +227,10 @@ fn build_volume(dcm_files: &[PathBuf]) -> Result<VolumeData> {
         }
 
         println!(
-            "  ✓ Loaded slice {}/{}: {:?}",
+            "  ✓ Loaded slice {}/{}: {}",
             z + 1,
             num_slices,
-            dcm_path.file_name().unwrap()
+            dcm_path.file_name().unwrap().display()
         );
     }
 
@@ -243,7 +245,8 @@ fn build_volume(dcm_files: &[PathBuf]) -> Result<VolumeData> {
     })
 }
 
-/// Compute the Z spacing between slices from ImagePositionPatient tags.
+/// Compute the Z spacing between slices from `ImagePositionPatient` tags.
+#[allow(clippy::cast_possible_truncation)]
 fn compute_slice_spacing(dcm_files: &[PathBuf]) -> Option<f32> {
     if dcm_files.len() < 2 {
         return None;
@@ -278,6 +281,7 @@ fn compute_slice_spacing(dcm_files: &[PathBuf]) -> Option<f32> {
 ///
 /// Maximizes inter-class variance on a 256-bin histogram to find the
 /// threshold that best separates foreground from background.
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn otsu_threshold(values: &[f32]) -> f32 {
     if values.is_empty() {
         return 0.0;
@@ -328,12 +332,12 @@ fn otsu_threshold(values: &[f32]) -> f32 {
             break;
         }
 
-        background_sum += t as f64 * count as f64;
+        background_sum = (t as f64).mul_add(count as f64, background_sum);
         let foreground_sum = total_sum - background_sum;
 
-        let mean_bg = background_sum / background_count;
-        let mean_fg = foreground_sum / foreground_count;
-        let diff = mean_bg - mean_fg;
+        let background_mean = background_sum / background_count;
+        let foreground_mean = foreground_sum / foreground_count;
+        let diff = background_mean - foreground_mean;
 
         let variance = background_count * foreground_count * diff * diff;
 
@@ -347,7 +351,7 @@ fn otsu_threshold(values: &[f32]) -> f32 {
     }
 
     // Average first and last bins with max variance for symmetric distributions
-    let best_threshold = (best_threshold_first + best_threshold_last) / 2;
+    let best_threshold = usize::midpoint(best_threshold_first, best_threshold_last);
 
     // Convert bin index back to value
     min_val + best_threshold as f32 / scale
@@ -375,10 +379,10 @@ fn gaussian_smooth_3d(
                 let mut sum = 0.0_f32;
                 let mut weight = 0.0_f32;
                 for (k, &kval) in kernel.iter().enumerate() {
-                    let xi = x as isize + k as isize - half as isize;
-                    if xi >= 0 && (xi as usize) < cols {
-                        let idx = xi as usize + y * cols + z * cols * rows;
-                        sum += values[idx] * kval;
+                    let xi = x.cast_signed() + k.cast_signed() - half.cast_signed();
+                    if xi >= 0 && (xi.cast_unsigned()) < cols {
+                        let idx = xi.cast_unsigned() + y * cols + z * cols * rows;
+                        sum = values[idx].mul_add(kval, sum);
                         weight += kval;
                     }
                 }
@@ -396,10 +400,10 @@ fn gaussian_smooth_3d(
                 let mut sum = 0.0_f32;
                 let mut weight = 0.0_f32;
                 for (k, &kval) in kernel.iter().enumerate() {
-                    let yi = y as isize + k as isize - half as isize;
-                    if yi >= 0 && (yi as usize) < rows {
-                        let idx = x + yi as usize * cols + z * cols * rows;
-                        sum += pass_x[idx] * kval;
+                    let yi = y.cast_signed() + k.cast_signed() - half.cast_signed();
+                    if yi >= 0 && (yi.cast_unsigned()) < rows {
+                        let idx = x + yi.cast_unsigned() * cols + z * cols * rows;
+                        sum = pass_x[idx].mul_add(kval, sum);
                         weight += kval;
                     }
                 }
@@ -417,10 +421,10 @@ fn gaussian_smooth_3d(
                 let mut sum = 0.0_f32;
                 let mut weight = 0.0_f32;
                 for (k, &kval) in kernel.iter().enumerate() {
-                    let zi = z as isize + k as isize - half as isize;
-                    if zi >= 0 && (zi as usize) < slices {
-                        let idx = x + y * cols + zi as usize * cols * rows;
-                        sum += pass_y[idx] * kval;
+                    let zi = z.cast_signed() + k.cast_signed() - half.cast_signed();
+                    if zi >= 0 && (zi.cast_unsigned()) < slices {
+                        let idx = x + y * cols + zi.cast_unsigned() * cols * rows;
+                        sum = pass_y[idx].mul_add(kval, sum);
                         weight += kval;
                     }
                 }
@@ -434,6 +438,7 @@ fn gaussian_smooth_3d(
 }
 
 /// Build a 1D Gaussian kernel with the given sigma.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
 fn build_gaussian_kernel(sigma: f32) -> Vec<f32> {
     let radius = (3.0 * sigma).ceil() as usize;
     let size = 2 * radius + 1;
@@ -484,20 +489,20 @@ fn write_stl_file(mesh: &mcubes::Mesh, path: &Path) -> Result<()> {
             v2.posit.z - v0.posit.z,
         ];
 
-        let nx = edge1[1] * edge2[2] - edge1[2] * edge2[1];
-        let ny = edge1[2] * edge2[0] - edge1[0] * edge2[2];
-        let nz = edge1[0] * edge2[1] - edge1[1] * edge2[0];
+        let nx = edge1[2].mul_add(-edge2[1], edge1[1] * edge2[2]);
+        let ny = edge1[0].mul_add(-edge2[2], edge1[2] * edge2[0]);
+        let nz = edge1[1].mul_add(-edge2[0], edge1[0] * edge2[1]);
 
         // Normalize
-        let len = (nx * nx + ny * ny + nz * nz).sqrt();
-        let (nx, ny, nz) = if len > 0.0 {
-            (nx / len, ny / len, nz / len)
+        let len = nz.mul_add(nz, ny.mul_add(ny, nx * nx)).sqrt();
+        let normal: [f32; 3] = if len > 0.0 {
+            [nx / len, ny / len, nz / len]
         } else {
-            (0.0, 0.0, 1.0)
+            [0.0, 0.0, 1.0]
         };
 
         stl_io::Triangle {
-            normal: stl_io::Normal::new([nx, ny, nz]),
+            normal: stl_io::Normal::new(normal),
             vertices: [
                 stl_io::Vertex::new([v0.posit.x, v0.posit.y, v0.posit.z]),
                 stl_io::Vertex::new([v1.posit.x, v1.posit.y, v1.posit.z]),
@@ -507,10 +512,10 @@ fn write_stl_file(mesh: &mcubes::Mesh, path: &Path) -> Result<()> {
     });
 
     let mut file = BufWriter::new(
-        File::create(path).with_context(|| format!("Failed to create STL file: {path:?}"))?,
+        File::create(path).with_context(|| format!("Failed to create STL file: {}", path.display()))?,
     );
     stl_io::write_stl(&mut file, triangles)
-        .with_context(|| format!("Failed to write STL data: {path:?}"))?;
+        .with_context(|| format!("Failed to write STL data: {}", path.display()))?;
 
     Ok(())
 }

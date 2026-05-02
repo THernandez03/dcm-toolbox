@@ -21,19 +21,19 @@ use crate::utils::{
 };
 
 /// Tag used to split DICOM files into groups/series.
-#[derive(Clone, Copy, Debug, PartialEq, ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum SplitBy {
-    /// Split by SeriesNumber tag (0020,0011)
+    /// Split by `SeriesNumber` tag (0020,0011)
     SeriesNumber,
-    /// Split by SeriesInstanceUID tag (0020,000E)
+    /// Split by `SeriesInstanceUID` tag (0020,000E)
     SeriesUid,
-    /// Split by AcquisitionNumber tag (0020,0012)
+    /// Split by `AcquisitionNumber` tag (0020,0012)
     AcquisitionNumber,
-    /// Split by SeriesDescription tag (0008,103E)
+    /// Split by `SeriesDescription` tag (0008,103E)
     Description,
-    /// Split by ImageOrientationPatient tag (0020,0037)
+    /// Split by `ImageOrientationPatient` tag (0020,0037)
     Orientation,
-    /// Split by StackID tag (0020,9056)
+    /// Split by `StackID` tag (0020,9056)
     StackId,
 }
 
@@ -102,7 +102,7 @@ pub fn run(shared: &ConvertShared, format: &ConvertFormat) -> Result<()> {
         );
 
         match format {
-            ConvertFormat::Jpeg => jpeg::convert_to_jpgs(&group.files, &group.output_dir)?,
+            ConvertFormat::Jpeg => jpeg::convert_to_jpgs(&group.files, &group.output_dir),
             ConvertFormat::Video { fps } => {
                 video::convert_to_video(&group.files, &group.output_dir, *fps)?;
             }
@@ -126,7 +126,7 @@ fn prepare_groups(shared: &ConvertShared) -> Result<Vec<PreparedGroup>> {
     validate_input_folder(&shared.input)?;
 
     let entries = fs::read_dir(&shared.input)
-        .with_context(|| format!("Failed to read input folder: {:?}", shared.input))?;
+        .with_context(|| format!("Failed to read input folder: {}", shared.input.display()))?;
 
     let dcm_files: Vec<PathBuf> = entries
         .filter_map(std::result::Result::ok)
@@ -140,7 +140,7 @@ fn prepare_groups(shared: &ConvertShared) -> Result<Vec<PreparedGroup>> {
         .collect();
 
     if dcm_files.is_empty() {
-        println!("No .dcm files found in {:?}", shared.input);
+        println!("No .dcm files found in {}", shared.input.display());
         return Ok(vec![]);
     }
 
@@ -151,8 +151,9 @@ fn prepare_groups(shared: &ConvertShared) -> Result<Vec<PreparedGroup>> {
     let mut groups: HashMap<String, Vec<PathBuf>> = HashMap::new();
 
     for dcm_path in dcm_files {
-        let key = match open_file(&dcm_path) {
-            Ok(obj) => {
+        let key = open_file(&dcm_path).map_or_else(
+            |_| "unknown".to_string(),
+            |obj| {
                 let tag = match shared.split_by {
                     SplitBy::SeriesNumber => tags::SERIES_NUMBER,
                     SplitBy::SeriesUid => tags::SERIES_INSTANCE_UID,
@@ -164,11 +165,9 @@ fn prepare_groups(shared: &ConvertShared) -> Result<Vec<PreparedGroup>> {
                 obj.element(tag)
                     .ok()
                     .and_then(|elem| elem.to_str().ok())
-                    .map(|s| s.trim().to_string())
-                    .unwrap_or_else(|| "unknown".to_string())
-            }
-            Err(_) => "unknown".to_string(),
-        };
+                    .map_or_else(|| "unknown".to_string(), |s| s.trim().to_string())
+            },
+        );
         groups.entry(key).or_default().push(dcm_path);
     }
 
@@ -188,7 +187,7 @@ fn prepare_groups(shared: &ConvertShared) -> Result<Vec<PreparedGroup>> {
 
     // Ensure output folder exists
     fs::create_dir_all(&shared.output)
-        .with_context(|| format!("Failed to create output folder: {:?}", shared.output))?;
+        .with_context(|| format!("Failed to create output folder: {}", shared.output.display()))?;
 
     // Track saved choice for "to all" options
     let mut saved_choice: Option<CleanupChoice> = if shared.force {
@@ -208,21 +207,18 @@ fn prepare_groups(shared: &ConvertShared) -> Result<Vec<PreparedGroup>> {
             group_output.exists() && !is_folder_empty(&group_output).unwrap_or(true);
 
         let should_clean = if folder_exists {
-            match saved_choice {
-                Some(choice) => choice.should_clean(),
-                None => {
-                    let choice = prompt_to_cleanup(&group_output)?;
-                    if choice.is_persistent() {
-                        saved_choice = Some(choice);
-                    }
-                    choice.should_clean()
+            if let Some(choice) = saved_choice { choice.should_clean() } else {
+                let choice = prompt_to_cleanup(&group_output)?;
+                if choice.is_persistent() {
+                    saved_choice = Some(choice);
                 }
+                choice.should_clean()
             }
         } else {
             false
         };
 
-        let sorted_files = sort_files_by_position(&files)?;
+        let sorted_files = sort_files_by_position(&files);
 
         clean_output(&group_output, should_clean)?;
         fs::create_dir_all(&group_output)?;
@@ -237,14 +233,13 @@ fn prepare_groups(shared: &ConvertShared) -> Result<Vec<PreparedGroup>> {
     Ok(prepared)
 }
 
-/// Sort files by IMAGE_POSITION_PATIENT Z-coordinate.
-fn sort_files_by_position(files: &[PathBuf]) -> Result<Vec<PathBuf>> {
+/// Sort files by `IMAGE_POSITION_PATIENT` Z-coordinate.
+fn sort_files_by_position(files: &[PathBuf]) -> Vec<PathBuf> {
     let mut files_with_position: Vec<(PathBuf, f64)> = files
         .iter()
         .map(|path| {
-            let z_position = match open_file(path) {
-                Ok(obj) => obj
-                    .element(tags::IMAGE_POSITION_PATIENT)
+            let z_position = open_file(path).map_or(f64::MAX, |obj| {
+                obj.element(tags::IMAGE_POSITION_PATIENT)
                     .ok()
                     .and_then(|elem| elem.to_str().ok())
                     .and_then(|s| {
@@ -254,33 +249,32 @@ fn sort_files_by_position(files: &[PathBuf]) -> Result<Vec<PathBuf>> {
                             .collect();
                         coords.get(2).copied()
                     })
-                    .unwrap_or(f64::MAX),
-                Err(_) => f64::MAX,
-            };
+                    .unwrap_or(f64::MAX)
+            });
             (path.clone(), z_position)
         })
         .collect();
 
     files_with_position.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
-    Ok(files_with_position
+    files_with_position
         .into_iter()
         .map(|(path, _)| path)
-        .collect())
+        .collect()
 }
 
 /// Load a DICOM file and decode it as a dynamic image.
 fn load_dcm_as_image(dcm_path: &PathBuf) -> Result<DynamicImage> {
     let dicom_obj =
-        open_file(dcm_path).with_context(|| format!("Failed to open DICOM file: {dcm_path:?}"))?;
+        open_file(dcm_path).with_context(|| format!("Failed to open DICOM file: {}", dcm_path.display()))?;
 
     let pixel_data = dicom_obj
         .decode_pixel_data()
-        .with_context(|| format!("Failed to decode pixel data from: {dcm_path:?}"))?;
+        .with_context(|| format!("Failed to decode pixel data from: {}", dcm_path.display()))?;
 
     pixel_data
         .to_dynamic_image(0)
-        .with_context(|| format!("Failed to convert to image: {dcm_path:?}"))
+        .with_context(|| format!("Failed to convert to image: {}", dcm_path.display()))
 }
 
 #[cfg(test)]
@@ -364,15 +358,13 @@ mod tests {
                 let z = coords.get(2).copied().unwrap_or(f64::MAX);
                 assert!(
                     (z - expected_z).abs() < 0.001,
-                    "Position '{}' should have Z={}, got {}",
-                    position_str,
-                    expected_z,
-                    z
+                    "Position '{position_str}' should have Z={expected_z}, got {z}"
                 );
             }
         }
 
         #[test]
+        #[allow(clippy::float_cmp)]
         fn invalid_position_returns_max() {
             let invalid_cases = ["", "invalid", "1.0\\2.0"]; // Missing Z coordinate
 
@@ -386,8 +378,7 @@ mod tests {
                 assert_eq!(
                     z,
                     f64::MAX,
-                    "Invalid position '{}' should return f64::MAX",
-                    position_str
+                    "Invalid position '{position_str}' should return f64::MAX"
                 );
             }
         }
@@ -452,9 +443,7 @@ mod tests {
 
                 assert!(
                     video_path.ends_with(expected_video),
-                    "Folder '{}' should produce video '{}'",
-                    folder_name,
-                    expected_video
+                    "Folder '{folder_name}' should produce video '{expected_video}'"
                 );
             }
         }
@@ -489,9 +478,7 @@ mod tests {
 
                 assert!(
                     group_output.ends_with(expected_safe_key),
-                    "Key '{}' should produce path ending with '{}'",
-                    key,
-                    expected_safe_key
+                    "Key '{key}' should produce path ending with '{expected_safe_key}'"
                 );
             }
         }

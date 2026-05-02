@@ -2,12 +2,12 @@
 
 use std::fs;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
 /// User's choice when prompted about overwriting existing folders.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CleanupChoice {
     /// Clean folder before writing, apply to all remaining folders
     YesToAll,
@@ -21,19 +21,19 @@ pub enum CleanupChoice {
 
 impl CleanupChoice {
     /// Whether to clean the folder before writing.
-    pub fn should_clean(&self) -> bool {
+    pub const fn should_clean(self) -> bool {
         matches!(self, Self::YesToAll | Self::Yes)
     }
 
     /// Whether this choice should be saved for remaining folders.
-    pub fn is_persistent(&self) -> bool {
+    pub const fn is_persistent(self) -> bool {
         matches!(self, Self::YesToAll | Self::NoToAll)
     }
 }
 
 /// Prompt the user for overwrite confirmation.
-pub fn prompt_to_cleanup(folder_path: &PathBuf) -> Result<CleanupChoice> {
-    println!("Folder already exists: {folder_path:?}");
+pub fn prompt_to_cleanup(folder_path: &Path) -> Result<CleanupChoice> {
+    println!("Folder already exists: {}", folder_path.display());
     print!("Cleanup? [Y]es / Yes to [A]ll / [N]o / No to A[l]l: ");
     io::stdout().flush()?;
 
@@ -55,12 +55,12 @@ pub fn prompt_to_cleanup(folder_path: &PathBuf) -> Result<CleanupChoice> {
 }
 
 /// Validate that the input folder exists and is a directory.
-pub fn validate_input_folder(input: &PathBuf) -> Result<()> {
+pub fn validate_input_folder(input: &Path) -> Result<()> {
     if !input.exists() {
-        anyhow::bail!("Input folder does not exist: {input:?}");
+        anyhow::bail!("Input folder does not exist: {}", input.display());
     }
     if !input.is_dir() {
-        anyhow::bail!("Input path is not a directory: {input:?}");
+        anyhow::bail!("Input path is not a directory: {}", input.display());
     }
     Ok(())
 }
@@ -90,14 +90,14 @@ pub fn clean_output(path: &PathBuf, should_clean: bool) -> Result<()> {
     if path.is_file() {
         if should_clean {
             fs::remove_file(path)
-                .with_context(|| format!("Failed to remove existing file: {path:?}"))?;
-            println!("Removed existing file: {path:?}");
+                .with_context(|| format!("Failed to remove existing file: {}", path.display()))?;
+            println!("Removed existing file: {}", path.display());
         }
         // If not cleaning, the file will be overwritten naturally
     } else if path.is_dir() && !is_folder_empty(path)? && should_clean {
         fs::remove_dir_all(path)
-            .with_context(|| format!("Failed to clean output folder: {path:?}"))?;
-        println!("Cleaned output folder: {path:?}");
+            .with_context(|| format!("Failed to clean output folder: {}", path.display()))?;
+        println!("Cleaned output folder: {}", path.display());
     }
 
     Ok(())
@@ -106,7 +106,7 @@ pub fn clean_output(path: &PathBuf, should_clean: bool) -> Result<()> {
 /// Check if a folder is empty.
 pub fn is_folder_empty(path: &PathBuf) -> Result<bool> {
     let mut entries =
-        fs::read_dir(path).with_context(|| format!("Failed to read directory: {path:?}"))?;
+        fs::read_dir(path).with_context(|| format!("Failed to read directory: {}", path.display()))?;
     Ok(entries.next().is_none())
 }
 
@@ -200,7 +200,7 @@ mod tests {
         #[test]
         fn valid_folder_succeeds() {
             let temp_dir = TempDir::new().unwrap();
-            let result = validate_input_folder(&temp_dir.path().to_path_buf());
+            let result = validate_input_folder(temp_dir.path());
             assert!(result.is_ok());
         }
 
@@ -238,7 +238,7 @@ mod tests {
             let temp_dir = TempDir::new().unwrap();
             fs::write(temp_dir.path().join("file.txt"), "content").unwrap();
 
-            let result = validate_input_folder(&temp_dir.path().to_path_buf());
+            let result = validate_input_folder(temp_dir.path());
             assert!(result.is_ok());
         }
 
